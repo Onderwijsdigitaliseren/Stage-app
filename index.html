@@ -1442,14 +1442,28 @@ function stemVoor(wie){ // wie = naam van de spreker → {voice, pitch}
 if(synth){ laadStemmen(); synth.onvoiceschanged = laadStemmen; }
 const schoon = t => t.replace(/\([^)]*\)/g,'').replace(/\*[^*]*\*/g,'').replace(/…/g,'.').replace(/\s+/g,' ').trim();
 function spreek(tekst, wie){
+  // Per zin een aparte utterance met net iets andere toonhoogte en tempo: vragen omhoog, uitroepen sneller,
+  // korte zinnen iets sneller. Zo klinkt het minder monotoon dan één lange utterance.
   return new Promise(res => {
     const t = schoon(tekst); if(!O().stem || !synth || !t){ res(); return; }
-    const id = ++spreekTeller; const u = new SpeechSynthesisUtterance(t); const sv = stemVoor(wie || '');
-    u.lang = sv.voice ? sv.voice.lang : 'nl-NL'; if(sv.voice) u.voice = sv.voice; u.rate = .95; u.pitch = sv.pitch;
-    let klaar = false; const einde = () => { if(klaar) return; klaar = true; if(id === spreekTeller) praat(false); res(); };
-    u.onstart = () => praat(true); u.onend = einde; u.onerror = einde;
+    const id = ++spreekTeller; const sv = stemVoor(wie || '');
+    const zinnen = (t.match(/[^.!?]+[.!?]+["”]?|[^.!?]+$/g) || [t]).map(z => z.trim()).filter(Boolean);
+    let n = 0, klaar = false; const einde = () => { if(klaar) return; klaar = true; if(id === spreekTeller) praat(false); res(); };
+    zinnen.forEach((z, i) => {
+      const u = new SpeechSynthesisUtterance(z);
+      u.lang = sv.voice ? sv.voice.lang : 'nl-NL'; if(sv.voice) u.voice = sv.voice;
+      let pitch = sv.pitch, rate = .97;
+      if(/\?$/.test(z)) { pitch += .12; rate = .95; }
+      else if(/!$/.test(z)) { pitch += .08; rate = 1.06; }
+      else if(z.length < 25) { rate = 1.04; pitch += .04; }
+      else if(i % 2 === 1) { pitch -= .03; }
+      u.pitch = Math.max(.5, Math.min(2, pitch + (Math.random() - .5) * .06)); u.rate = rate;
+      u.onstart = () => { if(id === spreekTeller) praat(true); };
+      u.onend = () => { if(++n >= zinnen.length) einde(); };
+      u.onerror = () => { if(++n >= zinnen.length) einde(); };
+      synth.speak(u);
+    });
     setTimeout(einde, 1500 + t.length * 90);
-    synth.speak(u);
   });
 }
 function stil(){ if(synth) synth.cancel(); praat(false); }
@@ -1513,7 +1527,7 @@ function open(module, bedrijfNaam){
   tekenLijst();
   $('#o-lijst', P).onclick = e => { const b = e.target.closest('[data-b]'); if(!b) return; keuze.bedrijf = b.dataset.b; SS.SND.tik(); tekenLijst(); };
   $('.o-keuze', P).onclick = e => { const t = e.target.closest('[data-m]'); if(!t) return; keuze.module = t.dataset.m; $$('.o-keuze .tile', P).forEach(x => x.classList.toggle('aan', x === t)); SS.SND.tik(); };
-  const kort = v => esc(v.name.replace(/Microsoft |Google |Online \(Natural\) - Dutch \(Netherlands\)|Dutch \(Netherlands\)/g,'').trim()) + (geslachtVan(v)==='m'?' 👨':geslachtVan(v)==='v'?' 👩':'');
+  const kort = v => { let n = v.name.replace(/Microsoft /,'').replace(/Online \(Natural\) - Dutch \(Netherlands\)/,'(Natural)').replace(/ - Dutch \(Netherlands\)| Dutch \(Netherlands\)/,'').trim(); if(/google nederlands/i.test(v.name)) n = 'Google Nederlands (standaardstem Chrome)'; return esc(n) + (geslachtVan(v)==='m'?' 👨':geslachtVan(v)==='v'?' 👩':''); };
   const vul = () => { laadStemmen(); const opts = act => stemmen.length ? stemmen.map(v => `<option value="${esc(v.name)}" ${v===act?'selected':''}>${kort(v)}</option>`).join('') : '<option>Geen Nederlandse stem gevonden</option>'; $('#o-stemM', P).innerHTML = opts(stemM); $('#o-stemV', P).innerHTML = opts(stemV); }; vul(); if(synth) synth.onvoiceschanged = vul;
   const aan = () => { O().stem = true; SS.save(); $('#o-stem', P).textContent = '🔊'; };
   $('#o-stemM', P).onchange = e => { O().stemM = e.target.value; aan(); laadStemmen(); spreek('Goedemiddag, met Peter de Wit.', 'Peter de Wit'); };
@@ -1626,10 +1640,86 @@ function einde(){
     <div class="kaart"><div class="rij"><svg class="scorering" viewBox="0 0 120 120"><circle class="spoor" cx="60" cy="60" r="50"/><circle class="waarde" id="o-ring" cx="60" cy="60" r="50" stroke-dasharray="314" stroke-dashoffset="314" style="stroke:${T.css}"/><text x="60" y="68">${pct}%</text></svg><div class="stretch"><div style="font-size:22px;letter-spacing:3px">${pct >= 90 ? '⭐⭐⭐' : pct >= 70 ? '⭐⭐☆' : pct >= 45 ? '⭐☆☆' : '☆☆☆'}</div><b>${esc(oordeel)}</b><div class="muted sm" style="margin-top:4px">${T.emoji} ${esc(B.bedrijf)} · ${esc(B.plaats)}</div></div></div><div class="klaarkaart" style="padding:6px 0 0"><div class="xp num">+${xp} XP</div></div></div>
     <div class="kaart"><h3>Belangrijkste tip</h3><div class="tipkaart mt">${esc(zwak.length ? zwak[0].fb : 'Niets op aan te merken. Probeer nu een ander bedrijf of de andere oefening.')}</div></div>
     <div class="kaart"><h3>Per stap</h3><div class="rap mt">${G0.log.map(l => `<div class="r s${l.s}"><b>${esc(l.vraag)}</b>${esc(l.keuze.length > 90 ? l.keuze.slice(0,90) + '…' : l.keuze)}<br><i>${esc(l.fb)}</i></div>`).join('')}</div></div>
-    <div class="rij" style="flex-wrap:wrap;justify-content:center;padding-bottom:10px"><button class="btn prim" id="o-again">🔁 Nog een keer</button><button class="btn" id="o-ander">🎯 Andere oefening</button><button class="btn indigo" id="o-stad">🛵 Naar de stad</button></div></div>`);
+    <div class="rij" style="flex-wrap:wrap;justify-content:center;padding-bottom:10px"><button class="btn prim" id="o-print">📄 Download PDF (inleveren)</button><button class="btn" id="o-again">🔁 Nog een keer</button><button class="btn" id="o-ander">🎯 Andere oefening</button><button class="btn indigo" id="o-stad">🛵 Naar de stad</button></div></div>`);
   wireKop(); const bed = G0.bed, mod = G0.module;
   setTimeout(() => { const r = $('#o-ring', P); if(r) r.style.strokeDashoffset = 314 - 314 * pct / 100; }, 100);
+  $('#o-print', P).onclick = () => pdfRapport({ module:mod, bed, B, pct, oordeel, log:G0.log, naam:s.naam || 'Student', lj:s.lj, turns:G0.turns });
   $('#o-again', P).onclick = () => start(mod, bed); $('#o-ander', P).onclick = () => open(mod === 'bellen' ? 'sollicitatie' : 'bellen', bed.naam); $('#o-stad', P).onclick = () => { sluit(); SS.naStad(); };
+}
+/* ---------- PDF-uitdraai van het gedane gesprek (eigen mini-PDF-schrijver, geen bibliotheek nodig) ---------- */
+const PDF = (() => {
+  const W_REG = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,278,278,556,500,722,500,500,500,334,260,334,584];
+  const W_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+  const SPEC = { '‘':0x91,'’':0x92,'“':0x93,'”':0x94,'…':0x85,'–':0x96,'—':0x97,'€':0x80,'•':0x95,' ':0x20 };
+  const BASE = 'AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiionooooo/ouuuuypy';
+  function enc(str){ // → WinAnsi-tekens; emoji en onbekende tekens vallen weg
+    let out = ''; for(const ch of String(str)){ const c = ch.codePointAt(0); if(c < 128) out += ch; else if(SPEC[ch]) out += String.fromCharCode(SPEC[ch]); else if(c >= 128 && c <= 255) out += ch; else if(c === 0xFE0F || c === 0x200D) {} else if(c > 0x2000) {} else out += '?'; }
+    return out.replace(/\s+/g,' ').trim();
+  }
+  function width(str, size, bold){ const w = bold ? W_BOLD : W_REG; let t = 0; for(let i=0;i<str.length;i++){ let c = str.charCodeAt(i); if(c >= 192 && c <= 255) c = BASE.charCodeAt(c-192); t += (c >= 32 && c <= 126) ? w[c-32] : 556; } return t/1000*size; }
+  function wrap(str, size, bold, maxW){ const words = enc(str).split(' '); const lines = []; let cur = ''; words.forEach(w => { const p = cur ? cur + ' ' + w : w; if(width(p, size, bold) <= maxW || !cur) cur = p; else { lines.push(cur); cur = w; } }); if(cur) lines.push(cur); return lines; }
+  const escS = s => s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+  function maak(){
+    const PW = 595.28, PH = 841.89, M = 48; const pages = []; let ops = [], y = PH - M;
+    const kleur = (r,g,b) => `${(r/255).toFixed(3)} ${(g/255).toFixed(3)} ${(b/255).toFixed(3)}`;
+    const nieuwePagina = () => { if(ops.length) pages.push(ops); ops = []; y = PH - M; };
+    const rect = (x, yy, w, h, rgb) => ops.push(`${kleur(...rgb)} rg ${x.toFixed(2)} ${yy.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f`);
+    const tekst = (t, x, yy, size, bold, rgb) => ops.push(`BT /${bold?'F2':'F1'} ${size} Tf ${kleur(...(rgb||[32,17,110]))} rg ${x.toFixed(2)} ${yy.toFixed(2)} Td (${escS(enc(t))}) Tj ET`);
+    const ruimte = h => { if(y - h < M + 20) nieuwePagina(); };
+    const alinea = (t, opts={}) => { const size = opts.size||10, bold = !!opts.bold, x = M + (opts.indent||0), maxW = PW - 2*M - (opts.indent||0); const lines = wrap(t, size, bold, maxW); const lh = size*1.35; lines.forEach(l => { ruimte(lh); tekst(l, x, y - size, size, bold, opts.rgb); y -= lh; }); y -= (opts.after==null ? 2 : opts.after); };
+    const hoogte = (t, size, bold, indent) => wrap(t, size||10, bold, PW-2*M-(indent||0)).length * (size||10) * 1.35;
+    return { PW, PH, M, get y(){ return y; }, set y(v){ y = v; }, rect, tekst, alinea, ruimte, hoogte, nieuwePagina,
+      klaar(voet){ if(ops.length) pages.push(ops);
+        const objs = []; const add = s => { objs.push(s); return objs.length; };
+        const f1 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+        const f2 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+        const pagesIdx = objs.length + 1 + pages.length*2; const pageIds = [];
+        pages.forEach((p, i) => { const vt = [`BT /F1 8 Tf ${kleur(107,103,144)} rg ${M} ${M-22} Td (${escS(enc(voet))}) Tj ET`, `BT /F1 8 Tf ${kleur(107,103,144)} rg ${PW-M-60} ${M-22} Td (${escS(enc('pagina '+(i+1)+' van '+pages.length))}) Tj ET`]; const stream = p.concat(vt).join('\n'); const c = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`); const pg = add(`<< /Type /Page /Parent ${pagesIdx} 0 R /MediaBox [0 0 ${PW} ${PH}] /Contents ${c} 0 R /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> >>`); pageIds.push(pg); });
+        const pgs = add(`<< /Type /Pages /Kids [${pageIds.map(i => i+' 0 R').join(' ')}] /Count ${pageIds.length} >>`);
+        const cat = add(`<< /Type /Catalog /Pages ${pgs} 0 R >>`);
+        let out = '%PDF-1.4\n%âãÏÓ\n'; const offs = [];
+        objs.forEach((o, i) => { offs.push(out.length); out += `${i+1} 0 obj\n${o}\nendobj\n`; });
+        const xref = out.length; out += `xref\n0 ${objs.length+1}\n0000000000 65535 f \n` + offs.map(o => String(o).padStart(10,'0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length+1} /Root ${cat} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+        const bytes = new Uint8Array(out.length); for(let i=0;i<out.length;i++) bytes[i] = out.charCodeAt(i) & 255; return new Blob([bytes], { type:'application/pdf' }); } };
+  }
+  return { maak };
+})();
+
+function pdfRapport(r){
+  const T = r.B.T; const bellen = r.module === 'bellen';
+  const titel = bellen ? 'Telefoongesprek met een stagebedrijf' : 'Sollicitatiegesprek';
+  const d = PDF.maak(); const { PW, M } = d; const IND = [32,17,110], BLAUW = [17,100,179], MINT = [71,215,173], MUTED = [107,103,144], GROEN = [19,130,115], ORANJE = [180,95,0], ROOD = [221,28,80];
+  d.rect(M, d.y - 78, PW - 2*M, 78, IND);
+  d.tekst('STAGESTAD  ·  TECHNICUS ENGINEERING  ·  LEERJAAR ' + r.lj, M + 14, d.y - 18, 8, true, [200,195,235]);
+  d.tekst(titel, M + 14, d.y - 42, 20, true, [255,255,255]);
+  d.tekst(`${r.naam}  ·  ${r.bed.naam}, ${r.bed.plaats} (${T.naam})  ·  ${new Date().toLocaleDateString('nl-NL')}`, M + 14, d.y - 62, 10, false, [255,255,255]);
+  d.tekst(r.pct + '%', PW - M - 70, d.y - 50, 26, true, MINT);
+  d.y -= 92;
+  d.alinea('Oordeel: ' + r.oordeel, { size:11, bold:true, rgb:BLAUW, after:10 });
+  d.alinea(bellen ? `Situatie: ${r.naam} belt ${r.bed.naam} om te vragen naar een stageplek. De contactpersoon in deze oefening is ${r.B.contact} (${r.B.functie}); de receptie wordt gedaan door Sandra.` : `Situatie: ${r.naam} is uitgenodigd voor een gesprek bij ${r.bed.naam}. De gesprekspartner in deze oefening is ${r.B.contact} (${r.B.functie}).`, { size:9.5, rgb:MUTED, after:12 });
+  d.alinea('Het gesprek stap voor stap', { size:14, bold:true, after:6 });
+  const lab = {2:['Sterk', GROEN],1:['Kan beter', ORANJE],0:['Zwak', ROOD]};
+  const beste = t => t.checklist ? t.items.filter(i => i[1]).map(i => i[0]).join(', ') : (t.opties.find(o => o.s === 2) || {}).t;
+  r.turns.forEach((t, i) => {
+    const l = r.log[i] || {}; const vraag = t.checklist ? t.vraag : t.tekst; const wie = t.checklist ? t.titel : t.wie;
+    const nodig = 18 + d.hoogte(vraag, 10, true, 22) + d.hoogte('Jouw antwoord: ' + (l.keuze||''), 10, false, 22) + d.hoogte(l.fb||'', 9, true, 22) + 14; d.ruimte(Math.min(nodig, 220));
+    d.rect(M, d.y - 14, PW - 2*M, 14, [244,243,251]);
+    d.tekst(`${i+1}.  ${wie}`, M + 6, d.y - 10.5, 9, true, MUTED); d.y -= 18;
+    d.alinea(vraag, { size:10, bold:true, indent:22, after:3 });
+    const L = lab[l.s] || ['', MUTED];
+    d.alinea('Jouw antwoord: ' + (l.keuze || ''), { size:10, indent:22, after:2 });
+    d.alinea(L[0] + ' — ' + (l.fb || ''), { size:9, bold:true, rgb:L[1], indent:22, after:2 });
+    if(l.s !== 2) d.alinea('Sterkste antwoord: ' + (beste(t) || ''), { size:9, rgb:GROEN, indent:22, after:2 });
+    d.y -= 6;
+  });
+  d.ruimte(150); d.y -= 6; d.alinea('Reflectie (vul in en lever in)', { size:14, bold:true, after:6 });
+  ['Wat ging goed in dit gesprek?', 'Wat doe ik in het echte gesprek anders?', 'Welke vraag stel ik zelf aan het bedrijf?'].forEach(v => { d.ruimte(60); d.alinea(v, { size:10, bold:true, after:4 }); for(let k=0;k<2;k++){ d.rect(M, d.y - 14, PW - 2*M, .6, [200,197,230]); d.y -= 16; } d.y -= 4; });
+  d.ruimte(50); d.y -= 6; d.rect(M, d.y - 30, PW - 2*M, .6, [200,197,230]);
+  d.tekst('Naam: ' + r.naam + '        Klas: ____________        Datum: ____________        Paraaf docent: ____________', M, d.y - 44, 9, false, MUTED);
+  const blob = d.klaar('Stagestad · ' + titel + ' · ' + r.naam);
+  const naam = `stagestad-${bellen ? 'telefoongesprek' : 'sollicitatiegesprek'}-${(r.naam||'student').replace(/[^a-z0-9]+/gi,'_')}.pdf`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = naam; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 2000);
+  SS.toast('PDF gemaakt: ' + naam, 'goud');
 }
 return { open, start, sluit, get open_(){ return !!P; } };
 })();
